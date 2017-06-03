@@ -1,0 +1,2 @@
+Options: 
+CMake: 3.8.1@/Applications/CLion 2017.2 EAP.app/Contents/bin/cmake/bin/cmake
