@@ -147,10 +147,286 @@ word s_change(word& sw){
  * @param w
  */
 void key_expension(byte key[4*Nk], word w[4*(Nr+1)]){
-
+    word temp;
+    int i = 0;
+    // w[]的前4个就是输入的key
+    while(i < Nk){
+        w[i] = byte_to_word(key[4*i], key[4*i+1], key[4*i+2], key[4*i+3]);
+        ++i;
+    }
+    i = Nk;
+    while(i < 4*(Nr+1)) {
+        temp = w[i-1]; // 记录前一个word
+        if(i % Nk == 0){
+            temp = left_shift(temp); // 左移
+            w[i] = w[i-Nk] ^ s_change(temp) ^ Rcon[i/Nk-1];
+        }
+        else{
+            w[i] = w[i-Nk] ^ temp;
+        }
+        ++i;
+    }
 }
 
-int main() {
-    std::cout << "Hello, World!" << std::endl;
+/**
+ * S盒变换，前四位为行号，后四位位列号
+ * @param m
+ */
+void sub_bytes(byte m[4*4]){
+    for(int i=0; i<16; ++i) {
+        int row = m[i][7]*8 + m[i][6]*4 + m[i][5]*2 + m[i][4];
+        int col = m[i][3]*8 + m[i][2]*4 + m[i][1]*2 + m[i][0];
+        m[i] = S_Box[row][col];
+    }
+}
+
+/**
+ * 按字节循环移位进行行变换
+ * @param m
+ */
+void shift_rows(byte m[4*4]){
+    // 第二行循环左移一位
+    byte temp = m[4];
+    for(int i=0; i<3; ++i){
+        m[i+4] = m[i+5];
+    }
+    m[7] = temp;
+    // 第三行循环左移两位
+    for(int i=0; i<2; ++i) {
+        temp = m[i+8];
+        m[i+8] = m[i+10];
+        m[i+10] = temp;
+    }
+    // 第四行循环左移三位
+    temp = m[15];
+    for(int i=3; i>0; --i){
+        m[i+12] = m[i+11];
+    }
+    m[12] = temp;
+}
+
+/**
+ * 有限域上的乘法 GF(2^8)
+ * @param a
+ * @param b
+ * @return
+ */
+byte GFMul(byte a, byte b) {
+    byte p = 0;
+    byte hi_bit_set;
+    for (int counter = 0; counter < 8; counter++) {
+        if ((b & byte(1)) != 0) {
+            p ^= a;
+        }
+        hi_bit_set = (byte) (a & byte(0x80));
+        a <<= 1;
+        if (hi_bit_set != 0) {
+            a ^= 0x1b; /* x^8 + x^4 + x^3 + x + 1 */
+        }
+        b >>= 1;
+    }
+    return p;
+}
+
+/**
+ * 列变换
+ * @param m
+ */
+void mix_column(byte m[4*4]){
+    byte arr[4];
+    for(int i=0; i<4; ++i) {
+        for(int j=0; j<4; ++j){
+            arr[j] = m[i+j*4];
+        }
+        m[i] = GFMul(0x02, arr[0]) ^ GFMul(0x03, arr[1]) ^ arr[2] ^ arr[3];
+        m[i+4] = arr[0] ^ GFMul(0x02, arr[1]) ^ GFMul(0x03, arr[2]) ^ arr[3];
+        m[i+8] = arr[0] ^ arr[1] ^ GFMul(0x02, arr[2]) ^ GFMul(0x03, arr[3]);
+        m[i+12] = GFMul(0x03, arr[0]) ^ arr[1] ^ arr[2] ^ GFMul(0x02, arr[3]);
+    }
+}
+
+/**
+ * 轮密钥加变换，将每一列和扩展密钥进行异或
+ * @param m
+ * @param k
+ */
+void add_round_key(byte m[4*4], word k[4]){
+    for(int i=0; i<4; ++i) {
+        word k1 = k[i] >> 24;
+        word k2 = (k[i] << 8) >> 24;
+        word k3 = (k[i] << 16) >> 24;
+        word k4 = (k[i] << 24) >> 24;
+        m[i] = m[i] ^ byte(k1.to_ulong());
+        m[i+4] = m[i+4] ^ byte(k2.to_ulong());
+        m[i+8] = m[i+8] ^ byte(k3.to_ulong());
+        m[i+12] = m[i+12] ^ byte(k4.to_ulong());
+    }
+}
+
+/**
+ * 逆S盒变换
+ * @param m
+ */
+void InvSubBytes(byte m[4*4]){
+    for(int i=0; i<16; ++i) {
+        int row = m[i][7]*8 + m[i][6]*4 + m[i][5]*2 + m[i][4];
+        int col = m[i][3]*8 + m[i][2]*4 + m[i][1]*2 + m[i][0];
+        m[i] = Inv_S_Box[row][col];
+    }
+}
+
+/**
+ * 逆行变换
+ * @param m
+ */
+void InvShiftRows(byte m[4*4]) {
+    // 第二行循环右移一位
+    byte temp = m[7];
+    for(int i=3; i>0; --i){
+        m[i+4] = m[i+3];
+    }
+    m[4] = temp;
+    // 第三行循环右移两位
+    for(int i=0; i<2; ++i) {
+        temp = m[i+8];
+        m[i+8] = m[i+10];
+        m[i+10] = temp;
+    }
+    // 第四行循环右移三位
+    temp = m[12];
+    for(int i=0; i<3; ++i){
+        m[i+12] = m[i+13];
+    }
+    m[15] = temp;
+}
+
+/**
+ * 逆列变换
+ * @param m
+ */
+void InvMixColumns(byte m[4*4]) {
+	byte arr[4];
+	for(int i=0; i<4; ++i) {
+		for(int j=0; j<4; ++j){
+            arr[j] = m[i+j*4];
+        }
+		m[i] = GFMul(0x0e, arr[0]) ^ GFMul(0x0b, arr[1])
+			^ GFMul(0x0d, arr[2]) ^ GFMul(0x09, arr[3]);
+		m[i+4] = GFMul(0x09, arr[0]) ^ GFMul(0x0e, arr[1])
+			^ GFMul(0x0b, arr[2]) ^ GFMul(0x0d, arr[3]);
+		m[i+8] = GFMul(0x0d, arr[0]) ^ GFMul(0x09, arr[1])
+			^ GFMul(0x0e, arr[2]) ^ GFMul(0x0b, arr[3]);
+		m[i+12] = GFMul(0x0b, arr[0]) ^ GFMul(0x0d, arr[1])
+			^ GFMul(0x09, arr[2]) ^ GFMul(0x0e, arr[3]);
+	}
+}
+
+/**
+ * 加密过程
+ * @param in
+ * @param w
+ */
+void encrypt(byte in[4*4], word w[4*(Nr+1)]) {
+    word key[4];
+    for(int i=0; i<4; ++i){
+        key[i] = w[i];
+    }
+    add_round_key(in, key);
+    for(int round=1; round<Nr; ++round) {
+        sub_bytes(in);
+        shift_rows(in);
+        mix_column(in);
+        for(int i=0; i<4; ++i){
+            key[i] = w[4*round+i];
+        }
+        add_round_key(in, key);
+    }
+    sub_bytes(in);
+    shift_rows(in);
+    for(int i=0; i<4; ++i){
+        key[i] = w[4*Nr+i];
+    }
+    add_round_key(in, key);
+}
+
+/**
+ * 解密过程
+ * @param in
+ * @param w
+ */
+void decrypt(byte in[4*4], word w[4*(Nr+1)]) {
+    word key[4];
+    for(int i=0; i<4; ++i){
+        key[i] = w[4*Nr+i];
+    }
+    add_round_key(in, key);
+    for(int round=Nr-1; round>0; --round) {
+        InvShiftRows(in);
+        InvSubBytes(in);
+        for(int i=0; i<4; ++i){
+            key[i] = w[4*round+i];
+        }
+        add_round_key(in, key);
+        InvMixColumns(in);
+    }
+    InvShiftRows(in);
+    InvSubBytes(in);
+    for(int i=0; i<4; ++i){
+        key[i] = w[i];
+    }
+    add_round_key(in, key);
+}
+
+int main()
+{
+    byte key[16] = {0x2b, 0x7e, 0x15, 0x16,
+                    0x28, 0xae, 0xd2, 0xa6,
+                    0xab, 0xf7, 0x15, 0x88,
+                    0x09, 0xcf, 0x4f, 0x3c};
+
+    byte plain[16] = {0x32, 0x88, 0x31, 0xe0,
+                      0x43, 0x5a, 0x31, 0x37,
+                      0xf6, 0x30, 0x98, 0x07,
+                      0xa8, 0x8d, 0xa2, 0x34};
+    // 输出密钥
+    cout << "密钥是：";
+    for(int i=0; i<16; ++i)
+        cout << hex << key[i].to_ulong() << " ";
+    cout << endl;
+
+    word w[4*(Nr+1)];
+    key_expension(key, w);
+
+    // 输出待加密的明文
+    cout << endl << "待加密的明文："<<endl;
+    for(int i=0; i<16; ++i)
+    {
+        cout << hex << plain[i].to_ulong() << " ";
+        if((i+1)%4 == 0)
+            cout << endl;
+    }
+    cout << endl;
+
+    // 加密，输出密文
+    encrypt(plain, w);
+    cout << "加密后的密文："<<endl;
+    for(int i=0; i<16; ++i)
+    {
+        cout << hex << plain[i].to_ulong() << " ";
+        if((i+1)%4 == 0)
+            cout << endl;
+    }
+    cout << endl;
+
+    // 解密，输出明文
+    decrypt(plain, w);
+    cout << "解密后的明文："<<endl;
+    for(int i=0; i<16; ++i)
+    {
+        cout << hex << plain[i].to_ulong() << " ";
+        if((i+1)%4 == 0)
+            cout << endl;
+    }
+    cout << endl;
     return 0;
 }
